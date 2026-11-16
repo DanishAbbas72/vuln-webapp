@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>About VulnApp</title>
+  <script src="assets/js/app.js"></script>
+</head>
+<body>
+  <h1>About</h1>
+  <!-- VULN: target=_blank without rel="noopener" (reverse tabnabbing, CWE-1022) -->
+  <a href="https://example.com" target="_blank">External site</a>
+
+  <!-- VULN: Iframe without sandbox attribute -->
+  <iframe src="http://example.com/widget"></iframe>
+
+  <!-- VULN: Form submitting credentials over HTTP (CWE-319) -->
+  <form action="http://vulnapp.local/index.php" method="GET">
+    <input type="text" name="username">
+    <input type="password" name="password">
+    <button>Login</button>
+  </form>
+
+  <!-- VULN: Inline event handler with user-controlled data -->
+  <div id="out"></div>
+  <script>
+    var name = new URLSearchParams(location.search).get("name");
+    document.getElementById("out").innerHTML = "<img src=x onerror=\"\">Hello " + name;
+  </script>
+</body>
+</html>

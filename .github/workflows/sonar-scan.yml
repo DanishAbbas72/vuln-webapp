@@ -1,0 +1,160 @@
+name: SonarQube Security Scan
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    types: [ opened, synchronize, reopened ]
+  schedule:
+    - cron: '0 2 * * 1'        # Weekly scan every Monday 02:00 UTC
+  workflow_dispatch:            # Manual trigger from the Actions tab
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: sonar-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SONAR_PROJECT_KEY: vuln-webapp
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1. Syntax check so Sonar always analyses parseable code
+  # ---------------------------------------------------------------
+  lint:
+    name: PHP & JS Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: none
+
+      - name: PHP lint
+        run: |
+          find . -name "*.php" -not -path "./vendor/*" -print0 | xargs -0 -n1 php -l
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: JS syntax check
+        run: |
+          find . -name "*.js" -not -path "./node_modules/*" -print0 | xargs -0 -n1 node --check
+
+  # ---------------------------------------------------------------
+  # 2. SonarQube / SonarQube Cloud analysis
+  # ---------------------------------------------------------------
+  sonar:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout (full history for accurate blame / new-code detection)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache Sonar packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.projectVersion=${{ github.run_number }}
+            -Dsonar.scm.revision=${{ github.sha }}
+
+      # The app is intentionally vulnerable, so the gate WILL fail.
+      # continue-on-error keeps the pipeline going so reports still upload.
+      # Remove continue-on-error to make the build fail on a red gate.
+      - name: SonarQube Quality Gate
+        id: quality-gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          pollingTimeoutSec: 600
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: Export findings (vulnerabilities, hotspots, bugs)
+        if: always()
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          mkdir -p sonar-report
+          # Give the server a moment to finish indexing the analysis
+          sleep 15
+
+          curl -s -u "${SONAR_TOKEN}:" \
+            "${SONAR_HOST_URL}/api/issues/search?components=${SONAR_PROJECT_KEY}&types=VULNERABILITY&ps=500" \
+            -o sonar-report/vulnerabilities.json
+
+          curl -s -u "${SONAR_TOKEN}:" \
+            "${SONAR_HOST_URL}/api/hotspots/search?projectKey=${SONAR_PROJECT_KEY}&ps=500" \
+            -o sonar-report/security-hotspots.json
+
+          curl -s -u "${SONAR_TOKEN}:" \
+            "${SONAR_HOST_URL}/api/issues/search?components=${SONAR_PROJECT_KEY}&types=BUG,CODE_SMELL&ps=500" \
+            -o sonar-report/bugs-and-smells.json
+
+          curl -s -u "${SONAR_TOKEN}:" \
+            "${SONAR_HOST_URL}/api/measures/component?component=${SONAR_PROJECT_KEY}&metricKeys=vulnerabilities,security_hotspots,bugs,code_smells,security_rating,reliability_rating,ncloc" \
+            -o sonar-report/metrics.json
+
+      - name: Write job summary
+        if: always()
+        env:
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          GATE_STATUS: ${{ steps.quality-gate.outputs.quality-gate-status }}
+        run: |
+          VULNS=$(jq '.total // 0' sonar-report/vulnerabilities.json 2>/dev/null || echo "n/a")
+          HOTSPOTS=$(jq '.paging.total // 0' sonar-report/security-hotspots.json 2>/dev/null || echo "n/a")
+          OTHER=$(jq '.total // 0' sonar-report/bugs-and-smells.json 2>/dev/null || echo "n/a")
+          {
+            echo "## 🔍 SonarQube Scan Results"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| Quality Gate | **${GATE_STATUS:-unknown}** |"
+            echo "| Vulnerabilities | ${VULNS} |"
+            echo "| Security Hotspots | ${HOTSPOTS} |"
+            echo "| Bugs + Code Smells | ${OTHER} |"
+            echo ""
+            echo "### Top vulnerabilities"
+            jq -r '.issues[]? | "- **\(.severity)** `\(.component | split(":")[1])`:\(.line // "-") — \(.message)"' \
+              sonar-report/vulnerabilities.json 2>/dev/null | head -n 25
+            echo ""
+            echo "### Security hotspots"
+            jq -r '.hotspots[]? | "- **\(.vulnerabilityProbability)** `\(.component | split(":")[1])`:\(.line // "-") — \(.message)"' \
+              sonar-report/security-hotspots.json 2>/dev/null | head -n 25
+            echo ""
+            echo "[Open full dashboard](${SONAR_HOST_URL}/dashboard?id=${SONAR_PROJECT_KEY})"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Sonar report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonar-report-${{ github.run_number }}
+          path: sonar-report/
+          retention-days: 30

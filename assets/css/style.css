@@ -1,0 +1,11 @@
+body { font-family: Arial, sans-serif; margin: 0; background: #f4f4f4; color: #222; }
+nav { background: #222; padding: 10px; }
+nav a { color: #fff; margin-right: 12px; text-decoration: none; }
+main { padding: 20px; }
+.login-box { width: 320px; margin: 80px auto; background: #fff; padding: 24px; border-radius: 6px; }
+input, textarea { display: block; width: 100%; margin: 8px 0; padding: 8px; box-sizing: border-box; }
+button { padding: 8px 16px; }
+.error { color: #c00; }
+.comment { background: #fff; padding: 8px; margin: 6px 0; }
+.admin { background: #ffe; padding: 10px; border: 1px solid #cc0; }
+footer { text-align: center; padding: 10px; color: #777; }

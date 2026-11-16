@@ -1,3 +1,8 @@
+# Save as: .github/workflows/sonar-scan.yml
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   SONAR_TOKEN     - token from SonarQube Cloud (My Account -> Security)
+#   SONAR_HOST_URL  - https://sonarcloud.io  (or your self-hosted SonarQube URL)
+
 name: SonarQube Security Scan
 
 on:
@@ -18,7 +23,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SONAR_PROJECT_KEY: vuln-webapp
+  # Must match EXACTLY what Sonar shows under Project -> Information
+  SONAR_PROJECT_KEY: DanishAbbas72_vuln-webapp
+  # SonarQube Cloud organization key (ignored by self-hosted SonarQube)
+  SONAR_ORGANIZATION: danishabbas72
 
 jobs:
   # ---------------------------------------------------------------
@@ -78,6 +86,7 @@ jobs:
         with:
           args: >
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
             -Dsonar.projectVersion=${{ github.run_number }}
             -Dsonar.scm.revision=${{ github.sha }}
 
@@ -87,7 +96,7 @@ jobs:
       - name: SonarQube Quality Gate
         id: quality-gate
         uses: SonarSource/sonarqube-quality-gate-action@v1
-        timeout-minutes: 5
+        timeout-minutes: 10
         continue-on-error: true
         with:
           pollingTimeoutSec: 600
@@ -106,7 +115,7 @@ jobs:
           sleep 15
 
           curl -s -u "${SONAR_TOKEN}:" \
-            "${SONAR_HOST_URL}/api/issues/search?components=${SONAR_PROJECT_KEY}&types=VULNERABILITY&ps=500" \
+            "${SONAR_HOST_URL}/api/issues/search?componentKeys=${SONAR_PROJECT_KEY}&types=VULNERABILITY&ps=500" \
             -o sonar-report/vulnerabilities.json
 
           curl -s -u "${SONAR_TOKEN}:" \
@@ -114,7 +123,7 @@ jobs:
             -o sonar-report/security-hotspots.json
 
           curl -s -u "${SONAR_TOKEN}:" \
-            "${SONAR_HOST_URL}/api/issues/search?components=${SONAR_PROJECT_KEY}&types=BUG,CODE_SMELL&ps=500" \
+            "${SONAR_HOST_URL}/api/issues/search?componentKeys=${SONAR_PROJECT_KEY}&types=BUG,CODE_SMELL&ps=500" \
             -o sonar-report/bugs-and-smells.json
 
           curl -s -u "${SONAR_TOKEN}:" \
